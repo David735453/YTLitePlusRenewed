@@ -46,7 +46,7 @@ Hold to speed in Shorts will result in a crash;
 
 * adding an OLED theme.
 
-* add the option to download videos, Shorts and videos.......
+* add the option to download videos, Shorts and sound.......
 
 * Fixing whatever other issues might come down the road!
 
