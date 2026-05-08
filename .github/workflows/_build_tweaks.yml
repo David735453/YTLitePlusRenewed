@@ -1,0 +1,94 @@
+name: Build Tweaks
+
+on:
+  workflow_call:
+    inputs:
+      enable_youpip:
+        type: boolean
+      enable_ytuhd:
+        type: boolean
+      enable_yq:
+        type: boolean
+      enable_ryd:
+        type: boolean
+      enable_ytabc:
+        type: boolean
+      enable_demc:
+        type: boolean
+      tweak_version:
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Prerequisites
+        run: |
+          brew install ldid dpkg xz
+          echo "THEOS=~/theos" >> $GITHUB_ENV
+
+      - name: Setup Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS16.5.sdk.tar.xz -o ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz
+          tar -xf ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz -C ~/theos/sdks/
+          rm ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz
+
+      - name: Build YTLite tweak
+        run: |
+          cd YTLite-5.2b4-fixed
+          make clean
+          make package ROOTLESS=1 FINALPACKAGE=1
+          cp packages/*.deb ../ytplus.deb
+
+      - name: Build YTVideoOverlay tweak
+        run: |
+          cd YTVideoOverlay
+          # Ensure Makefile exists
+          if [ ! -f Makefile ]; then
+            cat > Makefile << 'EOF'
+            include $(THEOS)/makefiles/common.mk
+            TWEAK_NAME = YTVideoOverlay
+            $(TWEAK_NAME)_FRAMEWORKS = UIKit Foundation
+            $(TWEAK_NAME)_CFLAGS = -fobjc-arc -Wno-unused-function -I../YTLite-5.2b4-fixed
+            $(TWEAK_NAME)_FILES = Init.x
+            include $(THEOS_MAKE_PATH)/tweak.mk
+          EOF
+          fi
+          make clean
+          make package ROOTLESS=1 FINALPACKAGE=1
+          cp packages/*.deb ../ytvideooverlay.deb
+
+      - name: Prepare Additional Tweaks
+        run: |
+          mkdir -p extra_tweaks
+          unzip -j YTLite-5.2b4-fixed/ytweaks.zip -d extra_tweaks/ || true
+          
+          # Rename/Move based on inputs (assuming standard names in zip)
+          mkdir -p output_debs
+          cp ytplus.deb output_debs/
+          cp ytvideooverlay.deb output_debs/
+          
+          # Add pre-built adblocker (always include as per README)
+          if [ -f "AdblockerDylib-AP29.dylib" ]; then
+            cp AdblockerDylib-AP29.dylib output_debs/AdblockerDylib.dylib
+          fi
+
+          # Optional tweaks from zip
+          [ "${{ inputs.enable_youpip }}" = "true" ] && cp extra_tweaks/YouPiP.dylib output_debs/ 2>/dev/null || true
+          [ "${{ inputs.enable_ytuhd }}" = "true" ] && cp extra_tweaks/YTUHD.dylib output_debs/ 2>/dev/null || true
+          [ "${{ inputs.enable_yq }}" = "true" ] && cp extra_tweaks/YouQuality.dylib output_debs/ 2>/dev/null || true
+          [ "${{ inputs.enable_ryd }}" = "true" ] && cp extra_tweaks/ReturnYouTubeDislike.dylib output_debs/ 2>/dev/null || true
+          [ "${{ inputs.enable_ytabc }}" = "true" ] && cp extra_tweaks/YTABConfig.dylib output_debs/ 2>/dev/null || true
+          [ "${{ inputs.enable_demc }}" = "true" ] && cp extra_tweaks/DontEatMyContent.dylib output_debs/ 2>/dev/null || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-debs
+          path: output_debs/*

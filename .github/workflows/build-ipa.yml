@@ -1,89 +1,143 @@
-name: Build YTLitePlus IPA
+name: Create YouTube Plus app
 
 on:
   workflow_dispatch:
     inputs:
-      youtube_ipa_url:
-        description: "URL to YouTube IPA file"
+      enable_youpip:
+        description: "Integrate YouPiP"
+        type: boolean
         required: true
+        default: true
+
+      enable_ytuhd:
+        description: "Integrate YTUHD"
+        type: boolean
+        required: true
+        default: true
+
+      enable_yq:
+        description: "Integrate YouQuality"
+        type: boolean
+        required: true
+        default: true
+
+      enable_ryd:
+        description: "Integrate Return YouTube Dislikes"
+        type: boolean
+        required: true
+        default: true
+
+      enable_ytabc:
+        description: "Integrate YTABConfig"
+        type: boolean
+        required: true
+        default: true
+
+      enable_demc:
+        description: "Integrate DontEatMyContent"
+        type: boolean
+        required: true
+        default: true
+
+      ipa_url:
+        description: "URL to the decrypted IPA file"
         default: ""
+        required: true
+        type: string
+
+      tweak_version:
+        description: "The version of the tweak to use. Enter the version manually from dayanch96/YTLite/releases or leave default"
+        default: "5.2b4"
+        required: true
+        type: string
+
+      display_name:
+        description: "App Name (Optional)"
+        default: "YTLite"
+        required: true
+        type: string
+
+      bundle_id:
+        description: "BundleID (Optional)"
+        default: "com.google.ios.youtube"
+        required: true
+        type: string
+
+      info_note:
+        description: "TIP: Learn more about integrations in the README via the link below"
+        default: "https://github.com/dayanch96/YTLite#tweak-integration-details"
+        type: string
+        required: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build and Inject
+  build-tweaks:
+    uses: ./.github/workflows/_build_tweaks.yml
+    with:
+      enable_youpip: ${{ inputs.enable_youpip }}
+      enable_ytuhd: ${{ inputs.enable_ytuhd }}
+      enable_yq: ${{ inputs.enable_yq }}
+      enable_ryd: ${{ inputs.enable_ryd }}
+      enable_ytabc: ${{ inputs.enable_ytabc }}
+      enable_demc: ${{ inputs.enable_demc }}
+      tweak_version: ${{ inputs.tweak_version }}
+
+  package:
+    name: Package IPA
     runs-on: macos-latest
+    needs: build-tweaks
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Download built debs
+        uses: actions/download-artifact@v4
         with:
-          submodules: recursive
+          name: built-debs
+          path: ${{ github.workspace }}
 
-      - name: Install Prerequisites
-        run: |
-          brew install ldid dpkg xz
-          echo "THEOS=~/theos" >> $GITHUB_ENV
+      - name: Hide sensitive inputs
+        uses: levibostian/action-hide-sensitive-inputs@v1
+        with:
+          exclude_inputs: bundle_id,display_name,enable_demc,enable_ryd,enable_ytabc,enable_youpip,enable_yq,enable_ytuhd,info_note,tweak_version
 
-      - name: Setup Theos
+      - name: Download and validate IPA
         run: |
-          git clone --recursive https://github.com/theos/theos.git ~/theos
-          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS16.5.sdk.tar.xz -o ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz
-          tar -xf ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz -C ~/theos/sdks/
-          rm ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz
-
-      - name: Build YTLite tweak
-        run: |
-          cd YTLite-5.2b4-fixed
-          make clean
-          make package ROOTLESS=1 FINALPACKAGE=1
-          cp packages/*.deb ../ytlite.deb
-
-      - name: Build YTVideoOverlay tweak
-        run: |
-          cd YTVideoOverlay
-          make clean
-          make package ROOTLESS=1 FINALPACKAGE=1
-          cp packages/*.deb ../ytvideooverlay.deb
-
-      - name: Prepare Tweaks for Injection
-        run: |
-          mkdir -p tweaks
-          # Extract additional dylibs from ytweaks.zip
-          unzip -j YTLite-5.2b4-fixed/ytweaks.zip -d tweaks/ || true
-          # Add pre-built adblocker
-          if [ -f "AdblockerDylib-AP29.dylib" ]; then
-            cp AdblockerDylib-AP29.dylib tweaks/AdblockerDylib.dylib
-          fi
-          # Add built deb packages
-          cp ytlite.deb tweaks/
-          cp ytvideooverlay.deb tweaks/
-
-      - name: Download YouTube IPA
-        run: |
-          IPA_URL="${{ inputs.youtube_ipa_url }}"
-          if [ -z "$IPA_URL" ]; then
-            # Use a dummy IPA if no URL is provided (for testing/validation of the script)
-            mkdir -p Payload/YouTube.app
-            touch Payload/YouTube.app/YouTube
-            zip -r YouTube.ipa Payload/
-            echo "No IPA URL provided, created dummy IPA for validation"
-          else
-            curl -L "$IPA_URL" -o YouTube.ipa
+          wget "${{ github.event.inputs.ipa_url }}" --no-verbose -O youtube.ipa
+          file_type=$(file --mime-type -b youtube.ipa)
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
+            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type."
+            exit 1
           fi
 
-      - name: Inject Tweaks with Azule
+      - name: Install cyan
+        run: pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
+
+      - name: Inject tweaks into IPA
         run: |
-          # Download Azule
-          curl -L https://raw.githubusercontent.com/Al4ise/Azule/master/azule -o azule
-          chmod +x azule
+          tweaks=""
+          # Add all .deb files (ytplus.deb, ytvideooverlay.deb)
+          for f in *.deb; do
+            [ -f "$f" ] && tweaks="$tweaks $f"
+          done
+          # Add all .dylib files (Adblocker, and extra ones from zip)
+          for f in *.dylib; do
+            [ -f "$f" ] && tweaks="$tweaks $f"
+          done
+          
+          cyan -i youtube.ipa -o YouTubePlus_${{ github.event.inputs.tweak_version }}.ipa -uwef $tweaks -n "${{ github.event.inputs.display_name }}" -b ${{ github.event.inputs.bundle_id }}
 
-          # Inject everything in tweaks/ directory
-          # Azule handles both .deb and .dylib
-          ./azule -i YouTube.ipa -o output -f tweaks/* -n YTLitePlus
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v7
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: YTLitePlus_IPA
-          path: output/*.ipa
-          retention-days: 7
+          tag_name: ytp-${{ github.run_number }}
+          name: YouTubePlus v${{ github.event.inputs.tweak_version }} (${{ github.run_number }})
+          files: YouTubePlus_${{ github.event.inputs.tweak_version }}.ipa
+          draft: true
+
+      - name: Output Release URL
+        run: |
+          echo "::notice::Release available at: https://github.com/${{ github.repository }}/releases"
