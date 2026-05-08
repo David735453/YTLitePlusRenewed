@@ -4,20 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       youtube_ipa_url:
-        description: 'URL to YouTube IPA file'
+        description: "URL to YouTube IPA file"
         required: true
-        default: ''
-  push:
-    paths:
-      - 'YTLite-5.2b4-fixed/**'
-      - 'YTVideoOverlay/**'
-      - 'AdblockerDylib-AP29.dylib'
+        default: ""
 
 jobs:
   build:
     name: Build and Inject
     runs-on: macos-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -81,7 +76,7 @@ jobs:
           # Download Azule
           curl -L https://raw.githubusercontent.com/Al4ise/Azule/master/azule -o azule
           chmod +x azule
-          
+
           # Inject everything in tweaks/ directory
           # Azule handles both .deb and .dylib
           ./azule -i YouTube.ipa -o output -f tweaks/* -n YTLitePlus
