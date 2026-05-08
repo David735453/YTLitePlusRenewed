@@ -1,0 +1,94 @@
+name: Build YTLitePlus IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_ipa_url:
+        description: 'URL to YouTube IPA file'
+        required: true
+        default: ''
+  push:
+    paths:
+      - 'YTLite-5.2b4-fixed/**'
+      - 'YTVideoOverlay/**'
+      - 'AdblockerDylib-AP29.dylib'
+
+jobs:
+  build:
+    name: Build and Inject
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Prerequisites
+        run: |
+          brew install ldid dpkg xz
+          echo "THEOS=~/theos" >> $GITHUB_ENV
+
+      - name: Setup Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          curl -L https://github.com/theos/sdks/raw/master/iPhoneOS16.5.sdk.tar.xz -o ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz
+          tar -xf ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz -C ~/theos/sdks/
+          rm ~/theos/sdks/iPhoneOS16.5.sdk.tar.xz
+
+      - name: Build YTLite tweak
+        run: |
+          cd YTLite-5.2b4-fixed
+          make clean
+          make package ROOTLESS=1 FINALPACKAGE=1
+          cp packages/*.deb ../ytlite.deb
+
+      - name: Build YTVideoOverlay tweak
+        run: |
+          cd YTVideoOverlay
+          make clean
+          make package ROOTLESS=1 FINALPACKAGE=1
+          cp packages/*.deb ../ytvideooverlay.deb
+
+      - name: Prepare Tweaks for Injection
+        run: |
+          mkdir -p tweaks
+          # Extract additional dylibs from ytweaks.zip
+          unzip -j YTLite-5.2b4-fixed/ytweaks.zip -d tweaks/ || true
+          # Add pre-built adblocker
+          if [ -f "AdblockerDylib-AP29.dylib" ]; then
+            cp AdblockerDylib-AP29.dylib tweaks/AdblockerDylib.dylib
+          fi
+          # Add built deb packages
+          cp ytlite.deb tweaks/
+          cp ytvideooverlay.deb tweaks/
+
+      - name: Download YouTube IPA
+        run: |
+          IPA_URL="${{ inputs.youtube_ipa_url }}"
+          if [ -z "$IPA_URL" ]; then
+            # Use a dummy IPA if no URL is provided (for testing/validation of the script)
+            mkdir -p Payload/YouTube.app
+            touch Payload/YouTube.app/YouTube
+            zip -r YouTube.ipa Payload/
+            echo "No IPA URL provided, created dummy IPA for validation"
+          else
+            curl -L "$IPA_URL" -o YouTube.ipa
+          fi
+
+      - name: Inject Tweaks with Azule
+        run: |
+          # Download Azule
+          curl -L https://raw.githubusercontent.com/Al4ise/Azule/master/azule -o azule
+          chmod +x azule
+          
+          # Inject everything in tweaks/ directory
+          # Azule handles both .deb and .dylib
+          ./azule -i YouTube.ipa -o output -f tweaks/* -n YTLitePlus
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTLitePlus_IPA
+          path: output/*.ipa
+          retention-days: 7
